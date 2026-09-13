@@ -1,0 +1,9 @@
+{
+  "name": "agenda-futebol-diaria",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "update:games": "node scripts/update-games.mjs", "validate": "node scripts/validate-games.mjs" },
+  "devDependencies": { "playwright": "^1.55.0" },
+  "engines": { "node": ">=20" }
+}
