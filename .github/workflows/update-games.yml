@@ -3,6 +3,7 @@ name: Atualizar agenda de jogos
 on:
   schedule:
     - cron: '10 5 * * *'
+
   workflow_dispatch:
 
 permissions:
@@ -15,25 +16,35 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Gerar agenda do dia
         env:
           GAMES_TIMEZONE: America/Sao_Paulo
-          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: node scripts/update-games.mjs
 
-      - run: node scripts/validate-games.mjs
+      - name: Validar games.json
+        run: node scripts/validate-games.mjs
 
       - name: Salvar JSON atualizado
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
           git add public/games.json
-          git diff --staged --quiet || git commit -m 'chore: atualizar jogos do dia'
-          git push
+
+          if git diff --staged --quiet; then
+            echo "Nenhuma alteração no games.json."
+          else
+            git commit -m "chore: atualizar jogos do dia"
+            git push
+          fi
