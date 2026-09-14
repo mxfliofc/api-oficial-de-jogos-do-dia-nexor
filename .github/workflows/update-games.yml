@@ -2,63 +2,56 @@
 name: Atualizar agenda de jogos
 
 on:
+  workflow_dispatch:
+
   schedule:
     - cron: '10 5 * * *'
 
-  workflow_dispatch:
-
 permissions:
   contents: write
-
-concurrency:
-  group: update-daily-games
-  cancel-in-progress: false
 
 jobs:
   update:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Baixar código
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configurar Node.js
+      - name: Configurar Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Gerar agenda do dia
+      - name: Atualizar jogos
         env:
-          GAMES_TIMEZONE: America/Sao_Paulo
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-        run: |
-          node scripts/update-games.mjs
+          GAMES_TIMEZONE: America/Sao_Paulo
+        run: node scripts/update-games.mjs
 
-      - name: Validar games.json
-        run: |
-          node scripts/validate-games.mjs
+      - name: Validar JSON
+        run: node scripts/validate-games.mjs
 
-      - name: Verificar arquivos gerados
+      - name: Mostrar resultado
         run: |
-          echo "Arquivos de jogos:"
-          ls -lh public/games.json
+          echo "Games:"
+          cat public/games.json
 
           echo ""
-          echo "Quantidade de escudos:"
+          echo "Quantidade de logos:"
           find public/logos -type f -name "*.png" | wc -l
 
-      - name: Salvar jogos e escudos
+      - name: Salvar alterações
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add public/games.json
-          git add public/logos/
+          git add public/games.json public/logos/
 
-          if git diff --staged --quiet; then
-            echo "Nenhuma alteração para salvar."
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração encontrada."
           else
-            git commit -m "chore: atualizar jogos e escudos"
+            git commit -m "chore: atualizar jogos e logos"
             git push
           fi
 ```
