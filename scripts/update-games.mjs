@@ -2,50 +2,255 @@ import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 const output = resolve('public/games.json');
-const timezone = process.env.GAMES_TIMEZONE || 'America/Sao_Paulo';
-const key = process.env.RAPIDAPI_KEY;
-if (!key) throw new Error('RAPIDAPI_KEY não configurada nos Secrets do GitHub.');
-const date = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-const compactDate = date.replaceAll('-', '');
-const text = (input) => input === null || input === undefined ? null : String(input).replace(/\s+/g, ' ').trim() || null;
 
-function get(object, paths) {
-  for (const path of paths) {
-    const found = path.split('.').reduce((current, part) => current?.[part], object);
-    if (found !== undefined && found !== null && found !== '') return found;
+const timezone = process.env.GAMES_TIMEZONE || 'America/Sao_Paulo';
+const apiKey = process.env.API_FOOTBALL_KEY;
+
+if (!apiKey) {
+  throw new Error(
+    'API_FOOTBALL_KEY não configurada nos Secrets do GitHub.'
+  );
+}
+
+function getLocalDate() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+}
+
+const date = getLocalDate();
+
+function text(value) {
+  if (value === null || value === undefined) {
+    return null;
   }
-  return null;
+
+  const result = String(value)
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return result || null;
 }
-function kickoff(match) {
-  if (match.timeTS) return new Date(Number(match.timeTS)).toISOString();
-  return text(get(match, ['status.utcTime', 'startTime', 'date']));
+
+function normalizeStatus(short, long) {
+  const code = text(short);
+
+  if (!code) {
+    return 'scheduled';
+  }
+
+  if ([
+    '1H',
+    '2H',
+    'HT',
+    'ET',
+    'BT',
+    'P',
+    'LIVE'
+  ].includes(code)) {
+    return 'live';
+  }
+
+  if ([
+    'FT',
+    'AET',
+    'PEN'
+  ].includes(code)) {
+    return 'finished';
+  }
+
+  if ([
+    'PST',
+    'CANC',
+    'ABD',
+    'AWD',
+    'WO',
+    'SUSP'
+  ].includes(code)) {
+    return code.toLowerCase();
+  }
+
+  if (code === 'TBD' || code === 'NS') {
+    return 'scheduled';
+  }
+
+  return code.toLowerCase();
 }
-function normalize(match, index) {
-  const home = text(get(match, ['home.name']));
-  const away = text(get(match, ['away.name']));
-  if (!home || !away) return null;
+
+function normalizeFixture(fixture, index) {
+  const fixtureInfo = fixture?.fixture;
+  const teams = fixture?.teams;
+  const league = fixture?.league;
+  const goals = fixture?.goals;
+
+  const homeName = text(teams?.home?.name);
+  const awayName = text(teams?.away?.name);
+
+  if (!homeName || !awayName) {
+    return null;
+  }
+
   return {
-    id: `rapidapi:${match.id || index}`, date, kickoff: kickoff(match), timezone,
-    status: text(get(match, ['status.reason.short', 'status.reason.long'])) || 'scheduled',
-    home: { id: text(match.home?.id), name: home },
-    away: { id: text(match.away?.id), name: away },
-    score: { home: match.home?.score ?? null, away: match.away?.score ?? null },
-    competition: { id: text(match.leagueId), name: null, country: null },
-    venue: { name: null, city: null }, broadcasts: [],
-    source: { name: 'Free API Live Football Data via RapidAPI' }
+    id: `api-football:${fixtureInfo?.id ?? index}`,
+
+    date,
+
+    kickoff:
+      text(fixtureInfo?.date) ||
+      null,
+
+    timezone,
+
+    status: normalizeStatus(
+      fixtureInfo?.status?.short,
+      fixtureInfo?.status?.long
+    ),
+
+    statusShort:
+      text(fixtureInfo?.status?.short) ||
+      null,
+
+    statusLong:
+      text(fixtureInfo?.status?.long) ||
+      null,
+
+    elapsed:
+      fixtureInfo?.status?.elapsed ??
+      null,
+
+    home: {
+      id: text(teams?.home?.id),
+      name: homeName,
+      logo: text(teams?.home?.logo)
+    },
+
+    away: {
+      id: text(teams?.away?.id),
+      name: awayName,
+      logo: text(teams?.away?.logo)
+    },
+
+    score: {
+      home: goals?.home ?? null,
+      away: goals?.away ?? null
+    },
+
+    competition: {
+      id: text(league?.id),
+      name: text(league?.name),
+      country: text(league?.country),
+      logo: text(league?.logo),
+      round: text(league?.round)
+    },
+
+    venue: {
+      id: text(fixtureInfo?.venue?.id),
+      name: text(fixtureInfo?.venue?.name),
+      city: text(fixtureInfo?.venue?.city)
+    },
+
+    broadcasts: [],
+
+    source: {
+      name: 'API-Football',
+      url: 'https://www.api-football.com/'
+    }
   };
 }
 
-const response = await fetch(`https://free-api-live-football-data.p.rapidapi.com/football-get-matches-by-date?date=${compactDate}`, {
-  headers: { 'Content-Type': 'application/json', 'x-rapidapi-host': 'free-api-live-football-data.p.rapidapi.com', 'x-rapidapi-key': key }
+const url =
+  `https://v3.football.api-sports.io/fixtures` +
+  `?date=${encodeURIComponent(date)}` +
+  `&timezone=${encodeURIComponent(timezone)}`;
+
+console.log(`Consultando API-Football para ${date}...`);
+
+const response = await fetch(url, {
+  method: 'GET',
+  headers: {
+    'x-apisports-key': apiKey,
+    'Accept': 'application/json'
+  }
 });
-if (!response.ok) throw new Error(`RapidAPI retornou ${response.status}: ${await response.text()}`);
-const body = await response.json();
-const games = (body.response?.matches || []).map(normalize).filter(Boolean).sort((a, b) => a.kickoff.localeCompare(b.kickoff));
-if (!games.length) throw new Error('A fonte respondeu, mas não retornou jogos para esta data.');
-const data = { schemaVersion: 2, date, timezone, updatedAt: new Date().toISOString(), source: 'Free API Live Football Data via RapidAPI', limitations: ['Esta rota fornece o ID da competição; nome, estádio e transmissão exigem rotas adicionais da fonte.'], games };
-await mkdir(dirname(output), { recursive: true });
+
+const responseText = await response.text();
+
+if (!response.ok) {
+  throw new Error(
+    `API-Football retornou HTTP ${response.status}: ${responseText}`
+  );
+}
+
+let body;
+
+try {
+  body = JSON.parse(responseText);
+} catch {
+  throw new Error(
+    'A API-Football respondeu algo que não é JSON.'
+  );
+}
+
+if (Array.isArray(body.errors) && body.errors.length > 0) {
+  throw new Error(
+    `API-Football retornou erros: ${JSON.stringify(body.errors)}`
+  );
+}
+
+if (!Array.isArray(body.response)) {
+  throw new Error(
+    'Resposta da API-Football não possui o campo response.'
+  );
+}
+
+const games = body.response
+  .map(normalizeFixture)
+  .filter(Boolean)
+  .sort((a, b) => {
+    return String(a.kickoff || '').localeCompare(
+      String(b.kickoff || '')
+    );
+  });
+
+const data = {
+  schemaVersion: 2,
+  date,
+  timezone,
+  updatedAt: new Date().toISOString(),
+
+  source: 'API-Football',
+
+  limitations: [
+    'Os jogos são obtidos pelo endpoint /fixtures da API-Football.',
+    'As transmissões de TV não são preenchidas nesta rota.'
+  ],
+
+  api: {
+    provider: 'API-Football',
+    endpoint: '/fixtures',
+    results: body.results ?? games.length
+  },
+
+  games
+};
+
+await mkdir(dirname(output), {
+  recursive: true
+});
+
 const temporary = `${output}.tmp`;
-await writeFile(temporary, `${JSON.stringify(data, null, 2)}\n`);
+
+await writeFile(
+  temporary,
+  `${JSON.stringify(data, null, 2)}\n`,
+  'utf8'
+);
+
 await rename(temporary, output);
-console.log(`${games.length} jogos de ${date} gravados em public/games.json`);
+
+console.log(
+  `${games.length} jogos de ${date} gravados em public/games.json`
+);
