@@ -1,5 +1,5 @@
 ```yaml
-name: Atualizar agenda de jogos
+name: Update daily games
 
 on:
   workflow_dispatch:
@@ -15,33 +15,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Configurar Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Atualizar jogos
+      - name: Update games
         env:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
           GAMES_TIMEZONE: America/Sao_Paulo
         run: node scripts/update-games.mjs
 
-      - name: Validar JSON
+      - name: Validate JSON
         run: node scripts/validate-games.mjs
 
-      - name: Mostrar resultado
+      - name: Show result
         run: |
           echo "Games:"
           cat public/games.json
 
           echo ""
-          echo "Quantidade de logos:"
+          echo "Number of logos:"
           find public/logos -type f -name "*.png" | wc -l
 
-      - name: Salvar alterações
+      - name: Save changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -49,9 +49,9 @@ jobs:
           git add public/games.json public/logos/
 
           if git diff --cached --quiet; then
-            echo "Nenhuma alteração encontrada."
+            echo "No changes found."
           else
-            git commit -m "chore: atualizar jogos e logos"
+            git commit -m "chore: update games and logos"
             git push
           fi
 ```
