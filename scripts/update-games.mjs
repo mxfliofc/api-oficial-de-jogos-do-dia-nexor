@@ -2,14 +2,13 @@ import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 const output = resolve('public/games.json');
+const logosDir = resolve('public/logos');
 
 const timezone = process.env.GAMES_TIMEZONE || 'America/Sao_Paulo';
 const apiKey = process.env.API_FOOTBALL_KEY;
 
 if (!apiKey) {
-  throw new Error(
-    'API_FOOTBALL_KEY não configurada nos Secrets do GitHub.'
-  );
+  throw new Error('API_FOOTBALL_KEY não configurada nos Secrets do GitHub.');
 }
 
 function getLocalDate() {
@@ -24,67 +23,81 @@ function getLocalDate() {
 const date = getLocalDate();
 
 function text(value) {
-  if (value === null || value === undefined) {
-    return null;
-  }
+  if (value === null || value === undefined) return null;
 
-  const result = String(value)
-    .replace(/\s+/g, ' ')
-    .trim();
+  const result = String(value).replace(/\s+/g, ' ').trim();
 
   return result || null;
 }
 
-function normalizeStatus(short, long) {
+function normalizeStatus(short) {
   const code = text(short);
 
-  if (!code) {
-    return 'scheduled';
-  }
+  if (!code) return 'scheduled';
 
-  if ([
-    '1H',
-    '2H',
-    'HT',
-    'ET',
-    'BT',
-    'P',
-    'LIVE'
-  ].includes(code)) {
+  if (['1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE'].includes(code)) {
     return 'live';
   }
 
-  if ([
-    'FT',
-    'AET',
-    'PEN'
-  ].includes(code)) {
+  if (['FT', 'AET', 'PEN'].includes(code)) {
     return 'finished';
   }
 
-  if ([
-    'PST',
-    'CANC',
-    'ABD',
-    'AWD',
-    'WO',
-    'SUSP'
-  ].includes(code)) {
+  if (['PST', 'CANC', 'ABD', 'AWD', 'WO', 'SUSP'].includes(code)) {
     return code.toLowerCase();
   }
 
-  if (code === 'TBD' || code === 'NS') {
+  if (['TBD', 'NS'].includes(code)) {
     return 'scheduled';
   }
 
   return code.toLowerCase();
 }
 
-function normalizeFixture(fixture, index) {
+async function downloadLogo(url, teamId) {
+  if (!url || !teamId) return null;
+
+  const fileName = `${teamId}.png`;
+  const filePath = resolve(logosDir, fileName);
+
+  try {
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      console.warn(
+        `Não foi possível baixar o escudo ${teamId}: HTTP ${response.status}`
+      );
+
+      return null;
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    if (!buffer.length) {
+      return null;
+    }
+
+    await writeFile(filePath, buffer);
+
+    return `/logos/${fileName}`;
+  } catch (error) {
+    console.warn(
+      `Erro ao baixar escudo ${teamId}:`,
+      error.message
+    );
+
+    return null;
+  }
+}
+
+async function normalizeFixture(fixture, index) {
   const fixtureInfo = fixture?.fixture;
   const teams = fixture?.teams;
   const league = fixture?.league;
   const goals = fixture?.goals;
+
+  const homeId = teams?.home?.id;
+  const awayId = teams?.away?.id;
 
   const homeName = text(teams?.home?.name);
   const awayName = text(teams?.away?.name);
@@ -93,45 +106,62 @@ function normalizeFixture(fixture, index) {
     return null;
   }
 
+  const homeLogo =
+    await downloadLogo(
+      teams?.home?.logo,
+      homeId
+    );
+
+  const awayLogo =
+    await downloadLogo(
+      teams?.away?.logo,
+      awayId
+    );
+
+  const leagueLogo =
+    await downloadLogo(
+      league?.logo,
+      `league-${league?.id}`
+    );
+
   return {
-    id: `api-football:${fixtureInfo?.id ?? index}`,
+    id: fixtureInfo?.id ?? index,
 
     date,
 
     kickoff:
-      text(fixtureInfo?.date) ||
-      null,
+      text(fixtureInfo?.date) || null,
 
     timezone,
 
     status: normalizeStatus(
-      fixtureInfo?.status?.short,
-      fixtureInfo?.status?.long
+      fixtureInfo?.status?.short
     ),
 
     statusShort:
-      text(fixtureInfo?.status?.short) ||
-      null,
+      text(fixtureInfo?.status?.short) || null,
 
     statusLong:
-      text(fixtureInfo?.status?.long) ||
-      null,
+      text(fixtureInfo?.status?.long) || null,
 
     elapsed:
-      fixtureInfo?.status?.elapsed ??
-      null,
+      fixtureInfo?.status?.elapsed ?? null,
 
-    home: {
-      id: text(teams?.home?.id),
-      name: homeName,
-      logo: text(teams?.home?.logo)
-    },
+    home: [
+      {
+        id: homeId ?? null,
+        name: homeName,
+        logo: homeLogo
+      }
+    ],
 
-    away: {
-      id: text(teams?.away?.id),
-      name: awayName,
-      logo: text(teams?.away?.logo)
-    },
+    away: [
+      {
+        id: awayId ?? null,
+        name: awayName,
+        logo: awayLogo
+      }
+    ],
 
     score: {
       home: goals?.home ?? null,
@@ -139,15 +169,15 @@ function normalizeFixture(fixture, index) {
     },
 
     competition: {
-      id: text(league?.id),
+      id: league?.id ?? null,
       name: text(league?.name),
       country: text(league?.country),
-      logo: text(league?.logo),
+      logo: leagueLogo,
       round: text(league?.round)
     },
 
     venue: {
-      id: text(fixtureInfo?.venue?.id),
+      id: fixtureInfo?.venue?.id ?? null,
       name: text(fixtureInfo?.venue?.name),
       city: text(fixtureInfo?.venue?.city)
     },
@@ -155,8 +185,7 @@ function normalizeFixture(fixture, index) {
     broadcasts: [],
 
     source: {
-      name: 'API-Football',
-      url: 'https://www.api-football.com/'
+      name: 'API-Football'
     }
   };
 }
@@ -189,9 +218,7 @@ let body;
 try {
   body = JSON.parse(responseText);
 } catch {
-  throw new Error(
-    'A API-Football respondeu algo que não é JSON.'
-  );
+  throw new Error('A API-Football não retornou JSON válido.');
 }
 
 if (Array.isArray(body.errors) && body.errors.length > 0) {
@@ -202,55 +229,47 @@ if (Array.isArray(body.errors) && body.errors.length > 0) {
 
 if (!Array.isArray(body.response)) {
   throw new Error(
-    'Resposta da API-Football não possui o campo response.'
+    'A resposta da API-Football não possui response[].'
   );
 }
 
-const games = body.response
-  .map(normalizeFixture)
-  .filter(Boolean)
-  .sort((a, b) => {
-    return String(a.kickoff || '').localeCompare(
-      String(b.kickoff || '')
-    );
-  });
-
-const data = {
-  schemaVersion: 2,
-  date,
-  timezone,
-  updatedAt: new Date().toISOString(),
-
-  source: 'API-Football',
-
-  limitations: [
-    'Os jogos são obtidos pelo endpoint /fixtures da API-Football.',
-    'As transmissões de TV não são preenchidas nesta rota.'
-  ],
-
-  api: {
-    provider: 'API-Football',
-    endpoint: '/fixtures',
-    results: body.results ?? games.length
-  },
-
-  games
-};
-
-await mkdir(dirname(output), {
+await mkdir(logosDir, {
   recursive: true
+});
+
+const games = [];
+
+for (let i = 0; i < body.response.length; i++) {
+  const game = await normalizeFixture(
+    body.response[i],
+    i
+  );
+
+  if (game) {
+    games.push(game);
+  }
+}
+
+games.sort((a, b) => {
+  return String(a.kickoff || '').localeCompare(
+    String(b.kickoff || '')
+  );
 });
 
 const temporary = `${output}.tmp`;
 
 await writeFile(
   temporary,
-  `${JSON.stringify(data, null, 2)}\n`,
+  `${JSON.stringify(games, null, 2)}\n`,
   'utf8'
 );
 
 await rename(temporary, output);
 
 console.log(
-  `${games.length} jogos de ${date} gravados em public/games.json`
+  `${games.length} jogos gravados em public/games.json`
+);
+
+console.log(
+  'Escudos armazenados localmente em public/logos/'
 );
