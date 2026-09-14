@@ -1,4 +1,3 @@
-```js
 import { readFile } from 'node:fs/promises';
 
 const file = JSON.parse(
@@ -12,6 +11,7 @@ if (!Array.isArray(file)) {
 }
 
 for (const game of file) {
+
   for (const field of [
     'id',
     'date',
@@ -22,6 +22,7 @@ for (const game of file) {
     'venue',
     'broadcasts'
   ]) {
+
     if (!(field in game)) {
       throw new Error(
         `Jogo ${game.id}: campo ausente "${field}".`
@@ -57,4 +58,3 @@ for (const game of file) {
 console.log(
   `games.json válido: ${file.length} jogos.`
 );
-```
