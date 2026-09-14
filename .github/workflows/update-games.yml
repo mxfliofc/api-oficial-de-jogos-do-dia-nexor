@@ -1,3 +1,4 @@
+```yaml
 name: Atualizar agenda de jogos
 
 on:
@@ -30,21 +31,34 @@ jobs:
         env:
           GAMES_TIMEZONE: America/Sao_Paulo
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-        run: node scripts/update-games.mjs
+        run: |
+          node scripts/update-games.mjs
 
       - name: Validar games.json
-        run: node scripts/validate-games.mjs
+        run: |
+          node scripts/validate-games.mjs
 
-      - name: Salvar JSON atualizado
+      - name: Verificar arquivos gerados
+        run: |
+          echo "Arquivos de jogos:"
+          ls -lh public/games.json
+
+          echo ""
+          echo "Quantidade de escudos:"
+          find public/logos -type f -name "*.png" | wc -l
+
+      - name: Salvar jogos e escudos
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
 
           git add public/games.json
+          git add public/logos/
 
           if git diff --staged --quiet; then
-            echo "Nenhuma alteração no games.json."
+            echo "Nenhuma alteração para salvar."
           else
-            git commit -m "chore: atualizar jogos do dia"
+            git commit -m "chore: atualizar jogos e escudos"
             git push
           fi
+```
