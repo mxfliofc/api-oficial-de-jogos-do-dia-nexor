@@ -8,8 +8,14 @@ const timezone = process.env.GAMES_TIMEZONE || 'America/Sao_Paulo';
 const apiKey = process.env.API_FOOTBALL_KEY;
 
 if (!apiKey) {
-  throw new Error('API_FOOTBALL_KEY não configurada nos Secrets do GitHub.');
+  throw new Error(
+    'API_FOOTBALL_KEY não configurada nos Secrets do GitHub.'
+  );
 }
+
+/* =========================================================
+   DATA ATUAL NO FUSO DO PROJETO
+   ========================================================= */
 
 function getLocalDate() {
   return new Intl.DateTimeFormat('en-CA', {
@@ -22,190 +28,409 @@ function getLocalDate() {
 
 const date = getLocalDate();
 
-function text(value) {
-  if (value === null || value === undefined) return null;
+/* =========================================================
+   FUNÇÕES AUXILIARES
+   ========================================================= */
 
-  const result = String(value).replace(/\s+/g, ' ').trim();
+function text(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const result = String(value)
+    .replace(/\s+/g, ' ')
+    .trim();
 
   return result || null;
 }
 
+function numberOrNull(value) {
+  return typeof value === 'number' ? value : null;
+}
+
+/* =========================================================
+   STATUS DA PARTIDA
+   ========================================================= */
+
 function normalizeStatus(short) {
   const code = text(short);
 
-  if (!code) return 'scheduled';
+  if (!code) {
+    return 'scheduled';
+  }
 
-  if (['1H', '2H', 'HT', 'ET', 'BT', 'P', 'LIVE'].includes(code)) {
+  if (
+    [
+      '1H',
+      '2H',
+      'HT',
+      'ET',
+      'BT',
+      'P',
+      'LIVE'
+    ].includes(code)
+  ) {
     return 'live';
   }
 
-  if (['FT', 'AET', 'PEN'].includes(code)) {
+  if (
+    [
+      'FT',
+      'AET',
+      'PEN'
+    ].includes(code)
+  ) {
     return 'finished';
   }
 
-  if (['PST', 'CANC', 'ABD', 'AWD', 'WO', 'SUSP'].includes(code)) {
+  if (
+    [
+      'PST',
+      'CANC',
+      'ABD',
+      'AWD',
+      'WO',
+      'SUSP'
+    ].includes(code)
+  ) {
     return code.toLowerCase();
   }
 
-  if (['TBD', 'NS'].includes(code)) {
+  if (
+    [
+      'NS',
+      'TBD'
+    ].includes(code)
+  ) {
     return 'scheduled';
   }
 
   return code.toLowerCase();
 }
 
-async function downloadLogo(url, teamId) {
-  if (!url || !teamId) return null;
+/* =========================================================
+   DOWNLOAD DOS LOGOS
+   ========================================================= */
 
-  const fileName = `${teamId}.png`;
-  const filePath = resolve(logosDir, fileName);
+async function downloadLogo(url, fileName) {
+  if (!url || !fileName) {
+    return null;
+  }
+
+  const filePath = resolve(
+    logosDir,
+    fileName
+  );
 
   try {
     const response = await fetch(url);
 
     if (!response.ok) {
       console.warn(
-        `Não foi possível baixar o escudo ${teamId}: HTTP ${response.status}`
+        `Erro ao baixar logo ${fileName}: HTTP ${response.status}`
       );
 
       return null;
     }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
+    const buffer = Buffer.from(
+      await response.arrayBuffer()
+    );
 
     if (!buffer.length) {
       return null;
     }
 
-    await writeFile(filePath, buffer);
+    await writeFile(
+      filePath,
+      buffer
+    );
 
     return `/logos/${fileName}`;
+
   } catch (error) {
     console.warn(
-      `Erro ao baixar escudo ${teamId}:`,
-      error.message
+      `Erro ao baixar logo ${fileName}: ${error.message}`
     );
 
     return null;
   }
 }
 
+/* =========================================================
+   NORMALIZAÇÃO DA PARTIDA
+   ========================================================= */
+
 async function normalizeFixture(fixture, index) {
+
   const fixtureInfo = fixture?.fixture;
   const teams = fixture?.teams;
   const league = fixture?.league;
   const goals = fixture?.goals;
+  const score = fixture?.score;
 
-  const homeId = teams?.home?.id;
-  const awayId = teams?.away?.id;
+  const homeId = numberOrNull(
+    teams?.home?.id
+  );
 
-  const homeName = text(teams?.home?.name);
-  const awayName = text(teams?.away?.name);
+  const awayId = numberOrNull(
+    teams?.away?.id
+  );
+
+  const homeName = text(
+    teams?.home?.name
+  );
+
+  const awayName = text(
+    teams?.away?.name
+  );
 
   if (!homeName || !awayName) {
     return null;
   }
 
-  const homeLogo =
-    await downloadLogo(
-      teams?.home?.logo,
-      homeId
-    );
+  /* =======================================================
+     LOGOS
+     ======================================================= */
 
-  const awayLogo =
-    await downloadLogo(
-      teams?.away?.logo,
-      awayId
-    );
+  const homeLogo = await downloadLogo(
+    teams?.home?.logo,
+    `${homeId}.png`
+  );
 
-  const leagueLogo =
-    await downloadLogo(
-      league?.logo,
-      `league-${league?.id}`
+  const awayLogo = await downloadLogo(
+    teams?.away?.logo,
+    `${awayId}.png`
+  );
+
+  let competitionLogo = null;
+
+  if (league?.logo && league?.id) {
+    competitionLogo = await downloadLogo(
+      league.logo,
+      `league-${league.id}.png`
     );
+  }
+
+  /* =======================================================
+     OBJETO FINAL
+     
+     IMPORTANTE:
+     TUDO FICA NO MESMO NÍVEL.
+     NÃO EXISTEM OBJETOS HOME/AWAY/SCORE ETC.
+     ======================================================= */
 
   return {
-    id: fixtureInfo?.id ?? index,
+
+    /* =====================================================
+       1. IDENTIFICAÇÃO DA PARTIDA
+       ===================================================== */
+
+    id:
+      numberOrNull(fixtureInfo?.id) ??
+      index,
 
     date,
 
     kickoff:
-      text(fixtureInfo?.date) || null,
+      text(fixtureInfo?.date),
 
     timezone,
 
-    status: normalizeStatus(
-      fixtureInfo?.status?.short
-    ),
+    /* =====================================================
+       2. TIMES
+       ===================================================== */
+
+    home_id:
+      homeId,
+
+    home_name:
+      homeName,
+
+    home_logo:
+      homeLogo,
+
+    home_winner:
+      teams?.home?.winner ?? null,
+
+    away_id:
+      awayId,
+
+    away_name:
+      awayName,
+
+    away_logo:
+      awayLogo,
+
+    away_winner:
+      teams?.away?.winner ?? null,
+
+    /* =====================================================
+       3. PLACAR ATUAL
+       ===================================================== */
+
+    score_home:
+      goals?.home ?? null,
+
+    score_away:
+      goals?.away ?? null,
+
+    /* =====================================================
+       4. STATUS
+       ===================================================== */
+
+    status:
+      normalizeStatus(
+        fixtureInfo?.status?.short
+      ),
 
     statusShort:
-      text(fixtureInfo?.status?.short) || null,
+      text(fixtureInfo?.status?.short),
 
     statusLong:
-      text(fixtureInfo?.status?.long) || null,
+      text(fixtureInfo?.status?.long),
 
     elapsed:
       fixtureInfo?.status?.elapsed ?? null,
 
-    home: [
-      {
-        id: homeId ?? null,
-        name: homeName,
-        logo: homeLogo
-      }
-    ],
+    extra_time:
+      fixtureInfo?.status?.extra ?? null,
 
-    away: [
-      {
-        id: awayId ?? null,
-        name: awayName,
-        logo: awayLogo
-      }
-    ],
+    /* =====================================================
+       5. PLACARES POR PERÍODO
+       ===================================================== */
 
-    score: {
-      home: goals?.home ?? null,
-      away: goals?.away ?? null
-    },
+    halftime_home:
+      score?.halftime?.home ?? null,
 
-    competition: {
-      id: league?.id ?? null,
-      name: text(league?.name),
-      country: text(league?.country),
-      logo: leagueLogo,
-      round: text(league?.round)
-    },
+    halftime_away:
+      score?.halftime?.away ?? null,
 
-    venue: {
-      id: fixtureInfo?.venue?.id ?? null,
-      name: text(fixtureInfo?.venue?.name),
-      city: text(fixtureInfo?.venue?.city)
-    },
+    fulltime_home:
+      score?.fulltime?.home ?? null,
+
+    fulltime_away:
+      score?.fulltime?.away ?? null,
+
+    extratime_home:
+      score?.extratime?.home ?? null,
+
+    extratime_away:
+      score?.extratime?.away ?? null,
+
+    penalty_home:
+      score?.penalty?.home ?? null,
+
+    penalty_away:
+      score?.penalty?.away ?? null,
+
+    /* =====================================================
+       6. COMPETIÇÃO
+       ===================================================== */
+
+    competition_id:
+      numberOrNull(league?.id),
+
+    competition_name:
+      text(league?.name),
+
+    competition_country:
+      text(league?.country),
+
+    competition_logo:
+      competitionLogo,
+
+    competition_flag:
+      text(league?.flag),
+
+    competition_season:
+      league?.season ?? null,
+
+    competition_round:
+      text(league?.round),
+
+    competition_standings:
+      league?.standings ?? null,
+
+    /* =====================================================
+       7. ESTÁDIO
+       ===================================================== */
+
+    venue_id:
+      numberOrNull(fixtureInfo?.venue?.id),
+
+    venue_name:
+      text(fixtureInfo?.venue?.name),
+
+    venue_city:
+      text(fixtureInfo?.venue?.city),
+
+    /* =====================================================
+       8. ARBITRAGEM
+       ===================================================== */
+
+    referee:
+      text(fixtureInfo?.referee),
+
+    /* =====================================================
+       9. INFORMAÇÕES TÉCNICAS DA PARTIDA
+       ===================================================== */
+
+    fixture_timezone:
+      text(fixtureInfo?.timezone),
+
+    fixture_timestamp:
+      fixtureInfo?.timestamp ?? null,
+
+    period_first:
+      fixtureInfo?.periods?.first ?? null,
+
+    period_second:
+      fixtureInfo?.periods?.second ?? null,
+
+    /* =====================================================
+       10. TRANSMISSÕES
+       ===================================================== */
 
     broadcasts: [],
 
-    source: {
-      name: 'API-Football'
-    }
+    /* =====================================================
+       11. FONTE
+       ===================================================== */
+
+    source_name:
+      'API-Football'
+
   };
 }
+
+/* =========================================================
+   CONSULTA API-FOOTBALL
+   ========================================================= */
 
 const url =
   `https://v3.football.api-sports.io/fixtures` +
   `?date=${encodeURIComponent(date)}` +
   `&timezone=${encodeURIComponent(timezone)}`;
 
-console.log(`Consultando API-Football para ${date}...`);
+console.log(
+  `Consultando API-Football para ${date}...`
+);
 
-const response = await fetch(url, {
-  method: 'GET',
-  headers: {
-    'x-apisports-key': apiKey,
-    'Accept': 'application/json'
+const response = await fetch(
+  url,
+  {
+    method: 'GET',
+
+    headers: {
+      'x-apisports-key': apiKey,
+      'Accept': 'application/json'
+    }
   }
-});
+);
 
-const responseText = await response.text();
+const responseText =
+  await response.text();
 
 if (!response.ok) {
   throw new Error(
@@ -213,50 +438,105 @@ if (!response.ok) {
   );
 }
 
+/* =========================================================
+   JSON DA API
+   ========================================================= */
+
 let body;
 
 try {
-  body = JSON.parse(responseText);
+
+  body =
+    JSON.parse(responseText);
+
 } catch {
-  throw new Error('A API-Football não retornou JSON válido.');
+
+  throw new Error(
+    'A API-Football não retornou JSON válido.'
+  );
+
 }
 
-if (Array.isArray(body.errors) && body.errors.length > 0) {
+/* =========================================================
+   ERROS DA API
+   ========================================================= */
+
+if (
+  Array.isArray(body.errors) &&
+  body.errors.length > 0
+) {
+
   throw new Error(
     `API-Football retornou erros: ${JSON.stringify(body.errors)}`
   );
+
 }
 
+/* =========================================================
+   VERIFICAR RESPONSE
+   ========================================================= */
+
 if (!Array.isArray(body.response)) {
+
   throw new Error(
     'A resposta da API-Football não possui response[].'
   );
+
 }
 
-await mkdir(logosDir, {
-  recursive: true
-});
+/* =========================================================
+   CRIAR PASTA DOS LOGOS
+   ========================================================= */
+
+await mkdir(
+  logosDir,
+  {
+    recursive: true
+  }
+);
+
+/* =========================================================
+   GERAR JOGOS
+   ========================================================= */
 
 const games = [];
 
-for (let i = 0; i < body.response.length; i++) {
-  const game = await normalizeFixture(
-    body.response[i],
-    i
-  );
+for (
+  let i = 0;
+  i < body.response.length;
+  i++
+) {
+
+  const game =
+    await normalizeFixture(
+      body.response[i],
+      i
+    );
 
   if (game) {
     games.push(game);
   }
+
 }
 
-games.sort((a, b) => {
-  return String(a.kickoff || '').localeCompare(
-    String(b.kickoff || '')
-  );
-});
+/* =========================================================
+   ORDENAR POR HORÁRIO
+   ========================================================= */
 
-const temporary = `${output}.tmp`;
+games.sort(
+  (a, b) =>
+    String(a.kickoff || '')
+      .localeCompare(
+        String(b.kickoff || '')
+      )
+);
+
+/* =========================================================
+   SALVAR GAMES.JSON
+   ========================================================= */
+
+const temporary =
+  `${output}.tmp`;
 
 await writeFile(
   temporary,
@@ -264,12 +544,19 @@ await writeFile(
   'utf8'
 );
 
-await rename(temporary, output);
+await rename(
+  temporary,
+  output
+);
+
+/* =========================================================
+   RESULTADO
+   ========================================================= */
 
 console.log(
-  `${games.length} jogos gravados em public/games.json`
+  `${games.length} jogos de ${date} gravados em public/games.json`
 );
 
 console.log(
-  'Escudos armazenados localmente em public/logos/'
+  `Logos armazenados em public/logos/`
 );
