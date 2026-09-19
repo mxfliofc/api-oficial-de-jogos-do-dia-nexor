@@ -1,9 +1,14 @@
 {
-  "name": "agenda-futebol-diaria",
-  "version": "1.0.0",
+  "name": "nexor-data",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "scripts": { "update:games": "node scripts/update-games.mjs", "validate": "node scripts/validate-games.mjs" },
-  "devDependencies": { "playwright": "^1.55.0" },
-  "engines": { "node": ">=20" }
+  "scripts": {
+    "update:games": "node scripts/update-games.mjs",
+    "update:live": "node scripts/update-live.mjs",
+    "validate": "node scripts/validate-games.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }
