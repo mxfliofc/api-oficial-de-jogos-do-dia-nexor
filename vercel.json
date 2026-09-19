@@ -1,6 +1,22 @@
 {
-  "headers": [{
-    "source": "/games.json",
-    "headers": [{ "key": "Cache-Control", "value": "public, max-age=300, s-maxage=300" }]
-  }]
+  "headers": [
+    {
+      "source": "/games.json",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=300, s-maxage=300, stale-while-revalidate=60"
+        }
+      ]
+    },
+    {
+      "source": "/live.json",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=30, s-maxage=30, stale-while-revalidate=15"
+        }
+      ]
+    }
+  ]
 }
