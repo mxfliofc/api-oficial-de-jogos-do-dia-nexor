@@ -1,27 +1,18 @@
 import { readFile } from 'node:fs/promises';
 
-const file = JSON.parse(
-  await readFile(
-    'public/games.json',
-    'utf8'
-  )
-);
-
-/* =========================================================
-   games.json precisa ser um ARRAY
-   ========================================================= */
-
-if (!Array.isArray(file)) {
-
-  throw new Error(
-    'Formato inválido: games.json deve ser um array.'
+const games =
+  JSON.parse(
+    await readFile(
+      'public/games.json',
+      'utf8'
+    )
   );
 
+if (!Array.isArray(games)) {
+  throw new Error(
+    'games.json precisa ser um array.'
+  );
 }
-
-/* =========================================================
-   CAMPOS PRINCIPAIS
-   ========================================================= */
 
 const requiredFields = [
   'id',
@@ -41,88 +32,105 @@ const requiredFields = [
   'score_away',
 
   'status',
-  'statusShort',
-  'statusLong',
 
   'competition_id',
   'competition_name',
 
-  'venue_id',
-  'venue_name',
-  'venue_city',
+  'events',
+  'lineups',
+  'statistics',
 
-  'broadcasts',
   'source_name'
 ];
 
-/* =========================================================
-   VALIDAR CADA JOGO
-   ========================================================= */
+const ids = new Set();
 
-for (const game of file) {
+for (const game of games) {
+  if (!game || typeof game !== 'object') {
+    throw new Error(
+      'Existe um item inválido em games.json.'
+    );
+  }
 
   for (const field of requiredFields) {
-
     if (!(field in game)) {
-
       throw new Error(
         `Jogo ${game.id}: campo ausente "${field}".`
       );
-
     }
-
   }
-
-  /* =======================================================
-     VERIFICAR TIPOS
-     ======================================================= */
 
   if (
     typeof game.id !== 'number'
   ) {
-
     throw new Error(
-      `Jogo ${game.id}: id deve ser número.`
+      `Jogo ${game.id}: id inválido.`
     );
+  }
 
+  if (ids.has(game.id)) {
+    throw new Error(
+      `ID duplicado: ${game.id}`
+    );
+  }
+
+  ids.add(game.id);
+
+  if (
+    game.home_id !== null &&
+    typeof game.home_id !== 'number'
+  ) {
+    throw new Error(
+      `Jogo ${game.id}: home_id inválido.`
+    );
   }
 
   if (
-    typeof game.home_name !== 'string'
+    game.away_id !== null &&
+    typeof game.away_id !== 'number'
   ) {
-
     throw new Error(
-      `Jogo ${game.id}: home_name deve ser texto.`
+      `Jogo ${game.id}: away_id inválido.`
     );
-
   }
 
   if (
-    typeof game.away_name !== 'string'
+    typeof game.home_name !== 'string' &&
+    game.home_name !== null
   ) {
-
     throw new Error(
-      `Jogo ${game.id}: away_name deve ser texto.`
+      `Jogo ${game.id}: home_name inválido.`
     );
-
   }
 
   if (
-    !Array.isArray(game.broadcasts)
+    typeof game.away_name !== 'string' &&
+    game.away_name !== null
   ) {
-
     throw new Error(
-      `Jogo ${game.id}: broadcasts deve ser array.`
+      `Jogo ${game.id}: away_name inválido.`
     );
-
   }
 
+  if (!Array.isArray(game.events)) {
+    throw new Error(
+      `Jogo ${game.id}: events deve ser array.`
+    );
+  }
+
+  if (!Array.isArray(game.lineups)) {
+    throw new Error(
+      `Jogo ${game.id}: lineups deve ser array.`
+    );
+  }
+
+  if (!Array.isArray(game.statistics)) {
+    throw new Error(
+      `Jogo ${game.id}: statistics deve ser array.`
+    );
+  }
 }
 
-/* =========================================================
-   RESULTADO
-   ========================================================= */
-
 console.log(
-  `games.json válido: ${file.length} jogos.`
+  `games.json válido: ${games.length} jogos.`
 );
