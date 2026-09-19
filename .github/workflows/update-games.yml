@@ -17,7 +17,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Node.js
+      - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -29,14 +29,14 @@ jobs:
         run: |
           node scripts/update-games.mjs
 
-      - name: Validar
+      - name: Validar JSON
         run: |
           node scripts/validate-games.mjs
 
       - name: Mostrar resumo
         run: |
           echo "Quantidade de jogos:"
-          node -e "const g=require('./public/games.json'); console.log(g.length)"
+          node -e "const fs=require('fs'); const g=JSON.parse(fs.readFileSync('./public/games.json','utf8')); console.log(g.length)"
 
           echo ""
           echo "Quantidade de logos:"
