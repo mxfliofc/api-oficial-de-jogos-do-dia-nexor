@@ -1,26 +1,48 @@
-import {
-  mkdir,
-  writeFile,
-  readdir,
-  unlink
-} from 'node:fs/promises';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 const API_BASE = 'https://api.sportmonks.com/v3/football';
 const TOKEN = process.env.SPORTMONKS_API_TOKEN;
 
 const TIMEZONE = process.env.GAMES_TIMEZONE || 'America/Sao_Paulo';
 
-const OUTPUT_FILE = 'public/games.json';
-const LOGOS_DIR = 'public/logos';
+const OUTPUT_FILE = path.resolve('public/games.json');
+const META_FILE = path.resolve('public/data-meta.json');
+const LOGOS_DIR = path.resolve('public/logos');
 
 if (!TOKEN) {
   throw new Error(
-    'SPORTMONKS_API_TOKEN não foi configurado.'
+    'SPORTMONKS_API_TOKEN não foi configurado nas Secrets do GitHub.'
   );
 }
 
-await mkdir('public', { recursive: true });
-await mkdir(LOGOS_DIR, { recursive: true });
+const INCLUDE_LIST = [
+  'participants',
+  'scores',
+  'state',
+  'league',
+  'season',
+  'round',
+  'stage',
+  'group',
+  'venue',
+  'referees',
+  'coaches',
+  'formations',
+  'events',
+  'lineups.player',
+  'lineups.details.type',
+  'statistics.type',
+  'metadata',
+  'periods',
+  'currentPeriod',
+  'tvStations'
+];
+
+const INCLUDES = INCLUDE_LIST.join(';');
+
+await fs.mkdir(path.dirname(OUTPUT_FILE), { recursive: true });
+await fs.mkdir(LOGOS_DIR, { recursive: true });
 
 function getBrazilDate() {
   const formatter = new Intl.DateTimeFormat('en-CA', {
@@ -33,832 +55,696 @@ function getBrazilDate() {
   return formatter.format(new Date());
 }
 
-function toBrazilDateTime(dateString) {
-  if (!dateString) return null;
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
 
-  const value = String(dateString).trim();
+function firstArrayItem(value) {
+  return Array.isArray(value) && value.length ? value[0] : null;
+}
 
-  if (value.includes('T')) {
-    return value;
+function cleanString(value) {
+  if (value === undefined || value === null) return null;
+  return String(value);
+}
+
+function numberOrNull(value) {
+  if (value === undefined || value === null || value === '') {
+    return null;
   }
 
-  return value.replace(' ', 'T') + '-03:00';
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : null;
 }
 
-function findParticipant(participants, location) {
-  if (!Array.isArray(participants)) return null;
-
-  return participants.find(
-    participant =>
-      participant.meta?.location === location ||
-      participant.location === location
-  ) || null;
-}
-
-function participantLogo(participant) {
-  if (!participant) return null;
+function getParticipant(fixture, location) {
+  const participants = safeArray(fixture.participants);
 
   return (
-    participant.image_path ||
-    participant.logo ||
-    participant.logo_path ||
+    participants.find(
+      (participant) =>
+        participant.meta?.location === location ||
+        participant.location === location
+    ) ||
+    participants.find((participant) => {
+      if (location === 'home') {
+        return (
+          participant.meta?.location === 'home' ||
+          participant.meta?.location === 1
+        );
+      }
+
+      return (
+        participant.meta?.location === 'away' ||
+        participant.meta?.location === 2
+      );
+    }) ||
     null
   );
 }
 
-function participantId(participant) {
-  return participant?.id ?? null;
-}
-
-function participantName(participant) {
-  return participant?.name ?? null;
-}
-
-function participantShortCode(participant) {
+function getParticipantId(participant) {
   return (
+    numberOrNull(participant?.id) ??
+    numberOrNull(participant?.team_id) ??
+    numberOrNull(participant?.participant_id)
+  );
+}
+
+function getParticipantName(participant) {
+  return (
+    participant?.name ||
     participant?.short_code ||
-    participant?.shortCode ||
-    participant?.code ||
+    participant?.short_name ||
     null
   );
 }
 
-function scoreForParticipant(scores, participantIdValue, description) {
-  if (!Array.isArray(scores)) return null;
+function getParticipantLogo(participant) {
+  return (
+    participant?.image_path ||
+    participant?.logo ||
+    participant?.logo_path ||
+    null
+  );
+}
 
-  const score = scores.find(item => {
-    if (item.participant_id !== participantIdValue) {
-      return false;
-    }
+function getScore(fixture, location) {
+  const scores = safeArray(fixture.scores);
 
-    if (!description) {
-      return true;
-    }
+  const score = scores.find(
+    (item) =>
+      item.description === 'CURRENT' &&
+      item.participant === location
+  );
 
+  if (score) {
     return (
-      item.description === description ||
-      item.type?.developer_name === description ||
-      item.type?.name === description
-    );
-  });
-
-  if (!score) return null;
-
-  if (score.score && typeof score.score === 'object') {
-    return (
-      score.score.goals ??
-      score.score.score ??
-      score.score.value ??
+      numberOrNull(score.goals) ??
+      numberOrNull(score.score?.goals) ??
       null
     );
   }
 
-  return score.score ?? null;
+  const fallback = scores.find(
+    (item) =>
+      item.participant === location ||
+      item.meta?.location === location
+  );
+
+  return (
+    numberOrNull(fallback?.goals) ??
+    numberOrNull(fallback?.score?.goals) ??
+    null
+  );
 }
 
-function scoreByDescription(scores, participantIdValue, descriptions) {
-  for (const description of descriptions) {
-    const value = scoreForParticipant(
-      scores,
-      participantIdValue,
-      description
+function getState(fixture) {
+  return fixture.state || {};
+}
+
+function getStatus(fixture) {
+  const state = getState(fixture);
+
+  return {
+    id: numberOrNull(state.id),
+    name: state.name || null,
+    short: state.short_name || state.short_code || null,
+    developer_name: state.developer_name || null
+  };
+}
+
+function getVenue(fixture) {
+  const venue = fixture.venue || {};
+
+  return {
+    id: numberOrNull(venue.id),
+    name: venue.name || null,
+    city: venue.city_name || venue.city || null,
+    address: venue.address || null,
+    capacity: numberOrNull(venue.capacity),
+    image: venue.image_path || null
+  };
+}
+
+function getLeague(fixture) {
+  const league = fixture.league || {};
+
+  return {
+    id: numberOrNull(league.id),
+    name: league.name || null,
+    country: league.country?.name || league.country_name || null,
+    image: league.image_path || null
+  };
+}
+
+function getSeason(fixture) {
+  const season = fixture.season || {};
+
+  return {
+    id: numberOrNull(season.id),
+    name: season.name || null
+  };
+}
+
+function getRound(fixture) {
+  const round = fixture.round || {};
+
+  return {
+    id: numberOrNull(round.id),
+    name: round.name || null,
+    type: round.type || null
+  };
+}
+
+function getStage(fixture) {
+  const stage = fixture.stage || {};
+
+  return {
+    id: numberOrNull(stage.id),
+    name: stage.name || null,
+    type: stage.type || null
+  };
+}
+
+function getGroup(fixture) {
+  const group = fixture.group || {};
+
+  return {
+    id: numberOrNull(group.id),
+    name: group.name || null
+  };
+}
+
+function getReferees(fixture) {
+  return safeArray(fixture.referees).map((referee) => ({
+    id: numberOrNull(referee.id),
+    name: referee.common_name || referee.name || null,
+    type: referee.type || null
+  }));
+}
+
+function getCoaches(fixture) {
+  return safeArray(fixture.coaches).map((coach) => ({
+    id: numberOrNull(coach.id),
+    name: coach.name || coach.common_name || null,
+    team_id:
+      numberOrNull(coach.team_id) ??
+      numberOrNull(coach.participant_id)
+  }));
+}
+
+function getTvStations(fixture) {
+  return safeArray(fixture.tvStations).map((station) => ({
+    id: numberOrNull(station.id),
+    name: station.name || null,
+    url: station.url || null
+  }));
+}
+
+function getLogoUrl(participant) {
+  const url = getParticipantLogo(participant);
+
+  if (!url || typeof url !== 'string') {
+    return null;
+  }
+
+  return url;
+}
+
+async function downloadLogo(participant) {
+  const id = getParticipantId(participant);
+  const url = getLogoUrl(participant);
+
+  if (!id || !url) {
+    return null;
+  }
+
+  const output = path.join(LOGOS_DIR, `${id}.png`);
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'NEXOR/2.0'
+      }
+    });
+
+    if (!response.ok) {
+      console.log(
+        `Logo ${id}: HTTP ${response.status}`
+      );
+
+      return `/logos/${id}.png`;
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    if (buffer.length > 0) {
+      await fs.writeFile(output, buffer);
+    }
+
+    return `/logos/${id}.png`;
+  } catch (error) {
+    console.log(
+      `Não foi possível baixar logo ${id}: ${error.message}`
     );
 
-    if (value !== null && value !== undefined) {
-      return value;
-    }
+    return `/logos/${id}.png`;
+  }
+}
+
+function getKickoff(fixture) {
+  if (fixture.starting_at) {
+    return fixture.starting_at;
+  }
+
+  if (fixture.starting_at_timestamp) {
+    return new Date(
+      fixture.starting_at_timestamp * 1000
+    ).toISOString();
   }
 
   return null;
 }
 
-function extractScoreSet(fixture, homeId, awayId) {
-  const scores = Array.isArray(fixture.scores)
-    ? fixture.scores
-    : [];
-
-  const get = (participantIdValue, descriptions) =>
-    scoreByDescription(
-      scores,
-      participantIdValue,
-      descriptions
-    );
-
+function normalizeEvent(event) {
   return {
-    current_home: get(homeId, [
-      'CURRENT',
-      'current'
-    ]),
-
-    current_away: get(awayId, [
-      'CURRENT',
-      'current'
-    ]),
-
-    halftime_home: get(homeId, [
-      '1ST_HALF',
-      '1st_half',
-      'HT',
-      'halftime'
-    ]),
-
-    halftime_away: get(awayId, [
-      '1ST_HALF',
-      '1st_half',
-      'HT',
-      'halftime'
-    ]),
-
-    fulltime_home: get(homeId, [
-      '2ND_HALF',
-      '2nd_half',
-      'FT',
-      'fulltime'
-    ]),
-
-    fulltime_away: get(awayId, [
-      '2ND_HALF',
-      '2nd_half',
-      'FT',
-      'fulltime'
-    ]),
-
-    extratime_home: get(homeId, [
-      'EXTRA_TIME',
-      'extra_time',
-      'ET',
-      'extratime'
-    ]),
-
-    extratime_away: get(awayId, [
-      'EXTRA_TIME',
-      'extra_time',
-      'ET',
-      'extratime'
-    ]),
-
-    penalty_home: get(homeId, [
-      'PENALTY_SHOOTOUT',
-      'penalty_shootout',
-      'PENALTIES',
-      'penalties'
-    ]),
-
-    penalty_away: get(awayId, [
-      'PENALTY_SHOOTOUT',
-      'penalty_shootout',
-      'PENALTIES',
-      'penalties'
-    ])
+    id: numberOrNull(event.id),
+    minute: numberOrNull(event.minute),
+    extra_minute: numberOrNull(event.extra_minute),
+    type: event.type || null,
+    detail: event.detail || null,
+    player_id:
+      numberOrNull(event.player_id) ??
+      numberOrNull(event.player?.id),
+    player_name:
+      event.player?.name ||
+      event.player?.common_name ||
+      null,
+    related_player_id:
+      numberOrNull(event.related_player_id) ??
+      numberOrNull(event.related_player?.id),
+    related_player_name:
+      event.related_player?.name ||
+      event.related_player?.common_name ||
+      null,
+    participant_id:
+      numberOrNull(event.participant_id) ??
+      numberOrNull(event.participant?.id)
   };
 }
 
-function stateName(state) {
-  if (!state) return null;
-
-  return (
-    state.name ||
-    state.short_name ||
-    state.developer_name ||
-    null
-  );
-}
-
-function stateShort(state) {
-  if (!state) return null;
-
-  return (
-    state.short_name ||
-    state.developer_name ||
-    state.name ||
-    null
-  );
-}
-
-function extractReferee(fixture) {
-  if (!Array.isArray(fixture.referees)) {
-    return {
-      id: null,
-      name: null
-    };
-  }
-
-  const referee =
-    fixture.referees.find(
-      item =>
-        item.type_id === 1 ||
-        item.type === 'referee' ||
-        item.type?.developer_name === 'REFEREE'
-    ) ||
-    fixture.referees[0];
-
+function normalizeLineup(lineup) {
   return {
-    id: referee?.referee_id ??
-      referee?.id ??
-      referee?.referee?.id ??
+    id: numberOrNull(lineup.id),
+    player_id:
+      numberOrNull(lineup.player_id) ??
+      numberOrNull(lineup.player?.id),
+    player_name:
+      lineup.player?.name ||
+      lineup.player?.common_name ||
+      lineup.name ||
       null,
+    jersey_number: numberOrNull(lineup.jersey_number),
+    formation_position:
+      numberOrNull(lineup.formation_position),
+    position_id:
+      numberOrNull(lineup.position_id),
+    type_id:
+      numberOrNull(lineup.type_id),
+    starter: Boolean(lineup.formation_position),
+    substitute: Boolean(lineup.substitute),
+    details: safeArray(lineup.details).map((detail) => ({
+      id: numberOrNull(detail.id),
+      type_id:
+        numberOrNull(detail.type_id) ??
+        numberOrNull(detail.type?.id),
+      type_name:
+        detail.type?.name ||
+        detail.type?.developer_name ||
+        null,
+      value: detail.value ?? null
+    }))
+  };
+}
 
-    name: referee?.referee?.name ??
-      referee?.name ??
+function normalizeStatistic(statistic) {
+  return {
+    id: numberOrNull(statistic.id),
+    participant_id:
+      numberOrNull(statistic.participant_id) ??
+      numberOrNull(statistic.team_id),
+    type_id:
+      numberOrNull(statistic.type_id) ??
+      numberOrNull(statistic.type?.id),
+    type_name:
+      statistic.type?.name ||
+      statistic.type?.developer_name ||
+      statistic.name ||
+      null,
+    value: statistic.value ?? null
+  };
+}
+
+function normalizeFormation(formation) {
+  return {
+    id: numberOrNull(formation.id),
+    participant_id:
+      numberOrNull(formation.participant_id) ??
+      numberOrNull(formation.team_id),
+    formation:
+      formation.formation ||
+      formation.formation_name ||
       null
   };
 }
 
-function logoIdFromParticipant(participant) {
-  return participant?.id ?? null;
-}
-
-async function downloadLogo(url, participantIdValue) {
-  if (!url || !participantIdValue) {
-    return null;
-  }
-
-  const filePath =
-    `${LOGOS_DIR}/${participantIdValue}.png`;
-
-  try {
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      console.warn(
-        `Logo ${participantIdValue}: HTTP ${response.status}`
-      );
-
-      return null;
-    }
-
-    const buffer = Buffer.from(
-      await response.arrayBuffer()
-    );
-
-    if (buffer.length === 0) {
-      return null;
-    }
-
-    await writeFile(filePath, buffer);
-
-    return `/logos/${participantIdValue}.png`;
-  } catch (error) {
-    console.warn(
-      `Erro ao baixar logo ${participantIdValue}:`,
-      error.message
-    );
-
-    return null;
-  }
-}
-
-async function cleanupLogos(validIds) {
-  const files = await readdir(LOGOS_DIR);
-
-  const valid = new Set(
-    [...validIds].map(String)
-  );
-
-  for (const file of files) {
-    if (!file.endsWith('.png')) continue;
-
-    const id = file.replace('.png', '');
-
-    if (!valid.has(id)) {
-      await unlink(
-        `${LOGOS_DIR}/${file}`
-      );
-
-      console.log(
-        `Logo removida: ${file}`
-      );
-    }
-  }
-}
-
-function flattenFixture(fixture) {
-  const participants =
-    fixture.participants || [];
-
-  const home =
-    findParticipant(
-      participants,
-      'home'
-    ) ||
-    participants[0] ||
-    null;
-
-  const away =
-    findParticipant(
-      participants,
-      'away'
-    ) ||
-    participants[1] ||
-    null;
-
-  const homeId =
-    participantId(home);
-
-  const awayId =
-    participantId(away);
-
-  const scores =
-    extractScoreSet(
-      fixture,
-      homeId,
-      awayId
-    );
-
-  const referee =
-    extractReferee(fixture);
-
-  const currentHome =
-    scores.current_home ??
-    fixture.scores?.find(
-      s =>
-        s.participant_id === homeId
-    )?.score?.goals ??
-    0;
-
-  const currentAway =
-    scores.current_away ??
-    fixture.scores?.find(
-      s =>
-        s.participant_id === awayId
-    )?.score?.goals ??
-    0;
-
+function normalizePeriod(period) {
   return {
-    id: fixture.id,
-
-    name: fixture.name,
-
-    date: fixture.starting_at
-      ? fixture.starting_at.slice(0, 10)
-      : null,
-
-    kickoff: toBrazilDateTime(
-      fixture.starting_at
-    ),
-
-    kickoff_timestamp:
-      fixture.starting_at_timestamp ??
-      null,
-
-    timezone: TIMEZONE,
-
-    sport_id:
-      fixture.sport_id ?? 1,
-
-    state_id:
-      fixture.state_id ?? null,
-
-    status:
-      stateShort(fixture.state),
-
-    status_name:
-      stateName(fixture.state),
-
-    status_id:
-      fixture.state?.id ??
-      fixture.state_id ??
-      null,
-
-    minute:
-      fixture.state?.minutes ??
-      fixture.minute ??
-      null,
-
-    length:
-      fixture.length ??
-      null,
-
-    result_info:
-      fixture.result_info ??
-      null,
-
-    details:
-      fixture.details ??
-      null,
-
-    leg:
-      fixture.leg ??
-      null,
-
-    placeholder:
-      fixture.placeholder ??
-      false,
-
-    last_processed_at:
-      fixture.last_processed_at ??
-      null,
-
-    home_id: homeId,
-
-    home_name:
-      participantName(home),
-
-    home_short_code:
-      participantShortCode(home),
-
-    home_logo:
-      homeId
-        ? `/logos/${homeId}.png`
-        : participantLogo(home),
-
-    home_meta:
-      home?.meta ??
-      null,
-
-    away_id: awayId,
-
-    away_name:
-      participantName(away),
-
-    away_short_code:
-      participantShortCode(away),
-
-    away_logo:
-      awayId
-        ? `/logos/${awayId}.png`
-        : participantLogo(away),
-
-    away_meta:
-      away?.meta ??
-      null,
-
-    score_home:
-      currentHome,
-
-    score_away:
-      currentAway,
-
-    halftime_home:
-      scores.halftime_home,
-
-    halftime_away:
-      scores.halftime_away,
-
-    fulltime_home:
-      scores.fulltime_home,
-
-    fulltime_away:
-      scores.fulltime_away,
-
-    extratime_home:
-      scores.extratime_home,
-
-    extratime_away:
-      scores.extratime_away,
-
-    penalty_home:
-      scores.penalty_home,
-
-    penalty_away:
-      scores.penalty_away,
-
-    competition_id:
-      fixture.league_id ??
-      fixture.league?.id ??
-      null,
-
-    competition_name:
-      fixture.league?.name ??
-      null,
-
-    competition_short_code:
-      fixture.league?.short_code ??
-      null,
-
-    competition_image:
-      fixture.league?.image_path ??
-      null,
-
-    season_id:
-      fixture.season_id ??
-      fixture.season?.id ??
-      null,
-
-    season_name:
-      fixture.season?.name ??
-      null,
-
-    stage_id:
-      fixture.stage_id ??
-      fixture.stage?.id ??
-      null,
-
-    stage_name:
-      fixture.stage?.name ??
-      null,
-
-    round_id:
-      fixture.round_id ??
-      fixture.round?.id ??
-      null,
-
-    round_name:
-      fixture.round?.name ??
-      null,
-
-    group_id:
-      fixture.group_id ??
-      fixture.group?.id ??
-      null,
-
-    group_name:
-      fixture.group?.name ??
-      null,
-
-    aggregate_id:
-      fixture.aggregate_id ??
-      fixture.aggregate?.id ??
-      null,
-
-    venue_id:
-      fixture.venue_id ??
-      fixture.venue?.id ??
-      null,
-
-    venue_name:
-      fixture.venue?.name ??
-      null,
-
-    venue_city:
-      fixture.venue?.city_name ??
-      fixture.venue?.city ??
-      null,
-
-    venue_address:
-      fixture.venue?.address ??
-      null,
-
-    venue_capacity:
-      fixture.venue?.capacity ??
-      null,
-
-    referee_id:
-      referee.id,
-
-    referee_name:
-      referee.name,
-
-    fixture_periods:
-      fixture.periods ??
-      [],
-
-    current_period:
-      fixture.currentPeriod ??
-      null,
-
-    broadcasts:
-      fixture.tvStations ??
-      [],
-
-    coaches:
-      fixture.coaches ??
-      [],
-
-    formations:
-      fixture.formations ??
-      [],
-
-    events:
-      fixture.events ??
-      [],
-
-    lineups:
-      fixture.lineups ??
-      [],
-
-    statistics:
-      fixture.statistics ??
-      [],
-
-    xg:
-      fixture.xGFixture ??
-      [],
-
-    metadata:
-      fixture.metadata ??
-      null,
-
-    weather:
-      fixture.weatherReport ??
-      null,
-
-    trends:
-      fixture.trends ??
-      [],
-
-    pressure:
-      fixture.pressure ??
-      [],
-
-    source:
-      'sportmonks',
-
-    source_name:
-      'Sportmonks',
-
-    updated_at:
-      new Date().toISOString()
+    id: numberOrNull(period.id),
+    description: period.description || null,
+    type: period.type || null,
+    started: period.started || null,
+    ended: period.ended || null
   };
 }
 
-async function fetchPage(date, page) {
-  const includes = [
-    'participants',
-    'scores',
-    'state',
-    'league',
-    'season',
-    'round',
-    'stage',
-    'group',
-    'venue',
-    'referees',
-    'coaches',
-    'formations',
-    'events',
-    'lineups.player',
-    'lineups.details.type',
-    'statistics.type',
-    'xGFixture',
-    'metadata',
-    'weatherReport',
-    'periods',
-    'currentPeriod',
-    'tvStations'
-  ].join(';');
-
-  const url =
-    `${API_BASE}/fixtures/date/${date}` +
-    `?api_token=${encodeURIComponent(TOKEN)}` +
-    `&timezone=${encodeURIComponent(TIMEZONE)}` +
-    `&per_page=50` +
-    `&page=${page}` +
-    `&include=${encodeURIComponent(includes)}`;
-
-  console.log(
-    `Buscando página ${page}: ${date}`
-  );
-
-  const response = await fetch(url);
-
-  const text = await response.text();
-
-  if (!response.ok) {
-    throw new Error(
-      `Sportmonks HTTP ${response.status}: ${text}`
-    );
+function normalizeMetadata(item) {
+  if (!item || typeof item !== 'object') {
+    return item;
   }
 
-  let json;
-
-  try {
-    json = JSON.parse(text);
-  } catch {
-    throw new Error(
-      'Sportmonks retornou uma resposta que não é JSON.'
-    );
-  }
-
-  if (json.message && !json.data) {
-    throw new Error(
-      `Sportmonks: ${json.message}`
-    );
-  }
-
-  return json;
+  return item;
 }
 
-async function fetchAllFixtures(date) {
+async function normalizeFixture(fixture) {
+  const home = getParticipant(fixture, 'home');
+  const away = getParticipant(fixture, 'away');
+
+  const homeId = getParticipantId(home);
+  const awayId = getParticipantId(away);
+
+  const [homeLogo, awayLogo] = await Promise.all([
+    downloadLogo(home),
+    downloadLogo(away)
+  ]);
+
+  const kickoff = getKickoff(fixture);
+
+  const date =
+    fixture.starting_at
+      ? new Intl.DateTimeFormat('en-CA', {
+          timeZone: TIMEZONE,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).format(new Date(fixture.starting_at))
+      : null;
+
+  const status = getStatus(fixture);
+  const league = getLeague(fixture);
+  const season = getSeason(fixture);
+  const round = getRound(fixture);
+  const stage = getStage(fixture);
+  const group = getGroup(fixture);
+
+  return {
+    id: numberOrNull(fixture.id),
+
+    source: 'sportmonks',
+    source_id: numberOrNull(fixture.id),
+
+    date,
+    kickoff,
+    timezone: TIMEZONE,
+
+    status_id: status.id,
+    status: status.name,
+    status_short: status.short,
+    status_developer_name: status.developer_name,
+
+    home_id: homeId,
+    home_name: getParticipantName(home),
+    home_short_code: home?.short_code || null,
+    home_logo: homeLogo,
+
+    away_id: awayId,
+    away_name: getParticipantName(away),
+    away_short_code: away?.short_code || null,
+    away_logo: awayLogo,
+
+    score_home: getScore(fixture, 'home'),
+    score_away: getScore(fixture, 'away'),
+
+    competition_id: league.id,
+    competition_name: league.name,
+    competition_country: league.country,
+    competition_logo: league.image,
+
+    season_id: season.id,
+    season_name: season.name,
+
+    round_id: round.id,
+    round_name: round.name,
+    round_type: round.type,
+
+    stage_id: stage.id,
+    stage_name: stage.name,
+    stage_type: stage.type,
+
+    group_id: group.id,
+    group_name: group.name,
+
+    venue_id: numberOrNull(fixture.venue?.id),
+    venue_name: getVenue(fixture).name,
+    venue_city: getVenue(fixture).city,
+    venue_address: getVenue(fixture).address,
+    venue_capacity: getVenue(fixture).capacity,
+    venue_image: getVenue(fixture).image,
+
+    referee_count: safeArray(fixture.referees).length,
+    coach_count: safeArray(fixture.coaches).length,
+
+    referees: getReferees(fixture),
+    coaches: getCoaches(fixture),
+    formations: safeArray(fixture.formations).map(normalizeFormation),
+
+    events: safeArray(fixture.events).map(normalizeEvent),
+
+    lineups: safeArray(fixture.lineups).map(normalizeLineup),
+
+    statistics: safeArray(fixture.statistics).map(normalizeStatistic),
+
+    periods: safeArray(fixture.periods).map(normalizePeriod),
+
+    current_period: fixture.currentPeriod || null,
+
+    tv_stations: getTvStations(fixture),
+
+    metadata: safeArray(fixture.metadata).map(normalizeMetadata),
+
+    comments: safeArray(fixture.comments),
+
+    raw_last_updated:
+      fixture.updated_at ||
+      fixture.updated_at_timestamp ||
+      null
+  };
+}
+
+async function fetchFixtures(date) {
   const fixtures = [];
 
   let page = 1;
+  let hasMore = true;
 
-  while (true) {
-    const response =
-      await fetchPage(
-        date,
-        page
+  while (hasMore) {
+    const url = new URL(
+      `${API_BASE}/fixtures/date/${date}`
+    );
+
+    url.searchParams.set('timezone', TIMEZONE);
+    url.searchParams.set('per_page', '50');
+    url.searchParams.set('page', String(page));
+    url.searchParams.set('include', INCLUDES);
+
+    console.log(
+      `Buscando página ${page}: ${date}`
+    );
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        Accept: 'application/json'
+      }
+    });
+
+    const text = await response.text();
+
+    if (!response.ok) {
+      throw new Error(
+        `Sportmonks HTTP ${response.status}: ${text}`
       );
+    }
 
-    const data =
-      Array.isArray(response.data)
-        ? response.data
-        : [];
+    let json;
+
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new Error(
+        'Sportmonks retornou uma resposta que não é JSON.'
+      );
+    }
+
+    const data = safeArray(json.data);
 
     fixtures.push(...data);
 
-    const hasMore =
-      response.pagination?.has_more ??
-      false;
+    hasMore =
+      json.pagination?.has_more === true;
 
-    if (!hasMore) {
-      break;
-    }
+    console.log(
+      `Página ${page}: ${data.length} jogos`
+    );
 
-    page++;
-
-    if (page > 100) {
-      throw new Error(
-        'Paginação excedeu 100 páginas.'
-      );
+    if (hasMore) {
+      page++;
     }
   }
 
   return fixtures;
 }
 
-const date = getBrazilDate();
+async function cleanUnusedLogos(usedIds) {
+  try {
+    const files = await fs.readdir(LOGOS_DIR);
 
-console.log(
-  `Data NEXOR: ${date}`
-);
+    for (const file of files) {
+      if (!file.endsWith('.png')) continue;
 
-const fixtures =
-  await fetchAllFixtures(date);
-
-console.log(
-  `Partidas recebidas: ${fixtures.length}`
-);
-
-const games =
-  fixtures
-    .map(flattenFixture)
-    .sort(
-      (a, b) =>
-        (a.kickoff_timestamp || 0) -
-        (b.kickoff_timestamp || 0)
-    );
-
-const validLogoIds =
-  new Set();
-
-for (const fixture of fixtures) {
-  for (const participant of
-    fixture.participants || []) {
-
-    if (participant?.id) {
-      validLogoIds.add(
-        participant.id
+      const id = path.basename(
+        file,
+        '.png'
       );
 
-      const logo =
-        participantLogo(
-          participant
+      if (!usedIds.has(id)) {
+        await fs.unlink(
+          path.join(LOGOS_DIR, file)
         );
 
-      if (logo) {
-        await downloadLogo(
-          logo,
-          participant.id
+        console.log(
+          `Logo removido: ${file}`
         );
       }
     }
+  } catch (error) {
+    console.log(
+      `Aviso ao limpar logos: ${error.message}`
+    );
   }
 }
 
-await cleanupLogos(
-  validLogoIds
+const date = getBrazilDate();
+
+console.log('');
+console.log('================================');
+console.log('       NEXOR DATA UPDATE');
+console.log('================================');
+console.log(`Data NEXOR: ${date}`);
+console.log(`Timezone: ${TIMEZONE}`);
+console.log('================================');
+console.log('');
+
+const fixtures = await fetchFixtures(date);
+
+console.log('');
+console.log(
+  `Total de fixtures recebidas: ${fixtures.length}`
+);
+console.log('');
+
+const games = [];
+
+for (let i = 0; i < fixtures.length; i++) {
+  const fixture = fixtures[i];
+
+  console.log(
+    `[${i + 1}/${fixtures.length}] Processando fixture ${fixture.id}`
+  );
+
+  try {
+    const game = await normalizeFixture(fixture);
+
+    games.push(game);
+  } catch (error) {
+    console.log(
+      `Erro na fixture ${fixture.id}: ${error.message}`
+    );
+  }
+}
+
+games.sort((a, b) => {
+  const dateA = a.kickoff
+    ? new Date(a.kickoff).getTime()
+    : Number.MAX_SAFE_INTEGER;
+
+  const dateB = b.kickoff
+    ? new Date(b.kickoff).getTime()
+    : Number.MAX_SAFE_INTEGER;
+
+  return dateA - dateB;
+});
+
+const usedLogoIds = new Set();
+
+for (const game of games) {
+  if (game.home_id) {
+    usedLogoIds.add(String(game.home_id));
+  }
+
+  if (game.away_id) {
+    usedLogoIds.add(String(game.away_id));
+  }
+}
+
+await cleanUnusedLogos(usedLogoIds);
+
+const output = JSON.stringify(
+  games,
+  null,
+  2
 );
 
-const output = {
-  generated_at:
-    new Date().toISOString(),
+await fs.writeFile(
+  OUTPUT_FILE,
+  output,
+  'utf8'
+);
 
+const meta = {
+  source: 'sportmonks',
+  generated_at: new Date().toISOString(),
   date,
-
-  timezone:
-    TIMEZONE,
-
-  source:
-    'Sportmonks',
-
-  total:
-    games.length,
-
-  games
+  timezone: TIMEZONE,
+  games: games.length,
+  includes: INCLUDE_LIST,
+  xg_enabled: false
 };
 
-await writeFile(
-  OUTPUT_FILE,
-  JSON.stringify(
-    games,
-    null,
-    2
-  ) + '\n',
+await fs.writeFile(
+  META_FILE,
+  JSON.stringify(meta, null, 2),
   'utf8'
 );
 
-await writeFile(
-  'public/data-meta.json',
-  JSON.stringify(
-    output,
-    null,
-    2
-  ) + '\n',
-  'utf8'
-);
-
-console.log(
-  `games.json atualizado com ${games.length} jogos.`
-);
+console.log('');
+console.log('================================');
+console.log('       ATUALIZAÇÃO CONCLUÍDA');
+console.log('================================');
+console.log(`Jogos: ${games.length}`);
+console.log(`Arquivo: ${OUTPUT_FILE}`);
+console.log(`Meta: ${META_FILE}`);
+console.log('xGFixture: DESATIVADO');
+console.log('================================');
