@@ -1,7 +1,8 @@
-name: Atualizar agenda de jogos
+name: Atualizar jogos do NEXOR
 
 on:
   workflow_dispatch:
+
   schedule:
     - cron: "10 5 * * *"
 
@@ -13,43 +14,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Update games
+      - name: Atualizar jogos
         env:
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-          GAMES_TIMEZONE: "America/Sao_Paulo"
-        run: node scripts/update-games.mjs
-
-      - name: Validate JSON
-        run: node scripts/validate-games.mjs
-
-      - name: Show result
+          SPORTMONKS_API_TOKEN: ${{ secrets.SPORTMONKS_API_TOKEN }}
+          GAMES_TIMEZONE: America/Sao_Paulo
         run: |
-          echo "Games:"
-          cat public/games.json
+          node scripts/update-games.mjs
+
+      - name: Validar
+        run: |
+          node scripts/validate-games.mjs
+
+      - name: Mostrar resumo
+        run: |
+          echo "Quantidade de jogos:"
+          node -e "const g=require('./public/games.json'); console.log(g.length)"
 
           echo ""
-          echo "Number of logos:"
+          echo "Quantidade de logos:"
           find public/logos -type f -name "*.png" | wc -l
 
-      - name: Save changes
+      - name: Salvar alterações
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add public/games.json
+          git add public/data-meta.json
           git add public/logos/
 
           if git diff --cached --quiet; then
-            echo "No changes found."
+            echo "Nenhuma alteração."
           else
-            git commit -m "chore: update games and logos"
+            git commit -m "chore: atualizar jogos"
             git push
           fi
