@@ -1,107 +1,88 @@
 import fs from "node:fs/promises";
 import {
-  getFixturesByDate,
-  getFixturesByIds
+getFixturesByDate
 } from "./api-football.mjs";
 import { normalizeFixture } from "./normalize.mjs";
 
 const TIMEZONE = "America/Sao_Paulo";
 
 function getDateInBrazil() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).format(new Date());
+return new Intl.DateTimeFormat("en-CA", {
+timeZone: TIMEZONE,
+year: "numeric",
+month: "2-digit",
+day: "2-digit"
+}).format(new Date());
 }
 
-function chunk(array, size) {
-  const result = [];
-
-  for (let i = 0; i < array.length; i += size) {
-    result.push(array.slice(i, i + size));
-  }
-
-  return result;
+async function writeJson(file, data) {
+await fs.writeFile(
+file,
+`${JSON.stringify(data, null, 2)}\n`,
+"utf8"
+);
 }
 
 async function main() {
-  const date = getDateInBrazil();
+const date = getDateInBrazil();
 
-  console.log(`Data NEXOR: ${date}`);
-  console.log(`Timezone: ${TIMEZONE}`);
-  console.log("Buscando jogos do dia...");
+console.log(`Data NEXOR: ${date}`);
+console.log(`Timezone: ${TIMEZONE}`);
+console.log("Buscando jogos do dia...");
 
-  const base = await getFixturesByDate(date);
-  const fixtures = base.response || [];
+/*
 
-  console.log(`Jogos encontrados: ${fixtures.length}`);
+* Plano Free:
+* Não usamos /fixtures?ids=...
+*
+* A chamada por data já retorna todos os
+* jogos disponíveis para o dia.
+  */
+  const data = await getFixturesByDate(date);
 
-  if (!fixtures.length) {
-    await fs.writeFile(
-      "public/games.json",
-      "[]\n",
-      "utf8"
-    );
+const fixtures = data.response || [];
 
-    return;
-  }
+console.log(`Jogos encontrados: ${fixtures.length}`);
 
-  const ids = fixtures
-    .map((item) => item.fixture?.id)
-    .filter(Boolean);
+const games = fixtures
+.map(normalizeFixture)
+.filter((game) => game.id !== null)
+.sort((a, b) => {
+return (a.kickoff || "").localeCompare(
+b.kickoff || ""
+);
+});
 
-  const details = [];
+await fs.mkdir("public", {
+recursive: true
+});
 
-  for (const batch of chunk(ids, 20)) {
-    console.log(
-      `Buscando detalhes: ${batch.length} jogos`
-    );
+await writeJson(
+"public/games.json",
+games
+);
 
-    const data = await getFixturesByIds(batch);
+await writeJson(
+"public/data-meta.json",
+{
+source: "API-Football",
+updated_at: new Date().toISOString(),
+date,
+timezone: TIMEZONE,
+games: games.length
+}
+);
 
-    details.push(...(data.response || []));
-  }
+console.log(
+`NEXOR atualizado: ${games.length} jogos`
+);
 
-  const games = details
-    .map(normalizeFixture)
-    .sort((a, b) => {
-      return (a.kickoff || "").localeCompare(
-        b.kickoff || ""
-      );
-    });
-
-  await fs.mkdir("public", { recursive: true });
-
-  await fs.writeFile(
-    "public/games.json",
-    `${JSON.stringify(games, null, 2)}\n`,
-    "utf8"
-  );
-
-  await fs.writeFile(
-    "public/data-meta.json",
-    `${JSON.stringify(
-      {
-        source: "API-Football",
-        updated_at: new Date().toISOString(),
-        date,
-        timezone: TIMEZONE,
-        games: games.length
-      },
-      null,
-      2
-    )}\n`,
-    "utf8"
-  );
-
-  console.log(
-    `NEXOR atualizado: ${games.length} jogos`
-  );
+console.log(
+"Nenhuma chamada /fixtures?ids= foi realizada."
+);
 }
 
 main().catch((error) => {
-  console.error(error);
-  process.exit(1);
+console.error(error);
+process.exit(1);
 });
